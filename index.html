@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gift Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#fbf7f2; --card:#fff; --ink:#1d1b19; --muted:#6b645c; --line:#e8e0d6; --accent:#c2410c; --accent-ink:#fff; --soft:#fff1e8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161412; --card:#211e1b; --ink:#f3eee8; --muted:#a79e94; --line:#35302b; --accent:#fb923c; --accent-ink:#1d1208; --soft:#2b2119; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 Inter, system-ui, sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:56px 16px 80px; }
+  .tag { display:inline-block; font-size:13px; font-weight:600; color:var(--accent); background:var(--soft); padding:4px 10px; border-radius:99px; }
+  h1 { font-family:Fraunces, Georgia, serif; font-size:clamp(36px,7vw,56px); line-height:1.05; margin:14px 0 10px; letter-spacing:-.02em; }
+  p.lead { color:var(--muted); font-size:18px; margin:0 0 28px; }
+  form { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:14px; box-shadow:0 8px 30px rgba(0,0,0,.05); }
+  textarea { width:100%; border:0; resize:none; font:inherit; font-size:18px; background:transparent; color:var(--ink); outline:none; min-height:70px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:99px; padding:5px 11px; font:inherit; font-size:13px; cursor:pointer; }
+  .chip:hover { color:var(--ink); border-color:var(--muted); }
+  button.go { background:var(--accent); color:var(--accent-ink); border:0; border-radius:12px; padding:12px 20px; font:inherit; font-weight:600; cursor:pointer; }
+  button.go:disabled { opacity:.6; cursor:wait; }
+  #steps { list-style:none; padding:0; margin:24px 0 0; color:var(--muted); font-size:14px; }
+  #steps li { padding:4px 0 4px 22px; position:relative; }
+  #steps li::before { content:"✓"; position:absolute; left:0; color:var(--accent); font-weight:600; }
+  #steps li.live::before { content:"•"; animation:blink 1s infinite; }
+  @keyframes blink { 50% { opacity:.2; } }
+  #results { display:grid; gap:14px; margin-top:22px; }
+  .gift { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px 20px; display:grid; grid-template-columns:auto 1fr; gap:4px 14px; animation:rise .4s ease both; }
+  .gift:nth-child(2) { animation-delay:.08s; } .gift:nth-child(3) { animation-delay:.16s; }
+  @keyframes rise { from { opacity:0; transform:translateY(8px); } }
+  .num { grid-row:span 3; font-family:Fraunces, Georgia, serif; font-size:28px; color:var(--accent); line-height:1; }
+  .gift h3 { margin:0; font-size:18px; }
+  .price { font-weight:600; color:var(--accent); margin-left:6px; white-space:nowrap; }
+  .gift p { margin:0; color:var(--muted); }
+  .gift a { color:var(--ink); font-weight:600; font-size:14px; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+  .note { margin-top:18px; font-size:13px; color:var(--muted); }
+  .err { color:#dc2626; margin-top:18px; }
+</style>
+</head>
+<body>
+<main>
+  <span class="tag">AI shopping agent</span>
+  <h1>Find the right gift in seconds.</h1>
+  <p class="lead">Describe who it's for, what they love and your budget. The agent searches real UK shops and picks three.</p>
+
+  <form id="f">
+    <textarea id="q" rows="2" placeholder="My dad, turning 60, loves fishing and crosswords, about £40"></textarea>
+    <div class="row">
+      <div class="chips">
+        <button type="button" class="chip">Sister, 25, into skincare, £30</button>
+        <button type="button" class="chip">Coffee-obsessed coworker, £20</button>
+        <button type="button" class="chip">Nephew, 8, loves space, £25</button>
+      </div>
+      <button class="go" id="go">Find gifts</button>
+    </div>
+  </form>
+
+  <ul id="steps"></ul>
+  <div id="results"></div>
+  <div id="msg"></div>
+</main>
+<script>
+  const f = document.getElementById('f'), q = document.getElementById('q'), go = document.getElementById('go');
+  const stepsEl = document.getElementById('steps'), results = document.getElementById('results'), msg = document.getElementById('msg');
+
+  document.querySelectorAll('.chip').forEach(c => c.onclick = () => { q.value = c.textContent; q.focus(); });
+  q.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); } });
+
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } };
+
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const request = q.value.trim();
+    if (!request) { q.focus(); return; }
+    go.disabled = true; go.textContent = 'Searching…';
+    results.innerHTML = ''; msg.innerHTML = '';
+    stepsEl.innerHTML = '<li class="live">Agent is thinking and searching the web…</li>';
+    try {
+      const r = await fetch('/api/find', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ request }) });
+      const data = await r.json();
+      stepsEl.innerHTML = (data.steps || []).map(s => `<li>${esc(s)}</li>`).join('');
+      if (!r.ok) throw new Error(data.error || 'Request failed');
+      if (!data.gifts?.length) { msg.innerHTML = '<p class="note">No good matches. Try adding a budget or a hobby.</p>'; return; }
+      results.innerHTML = data.gifts.map((g, i) => `
+        <article class="gift">
+          <div class="num">${i + 1}</div>
+          <h3>${esc(g.name)}${g.price ? `<span class="price">${esc(g.price)}</span>` : ''}</h3>
+          <p>${esc(g.reason)}</p>
+          <a href="${esc(g.url)}" target="_blank" rel="noopener">View at ${esc(host(g.url))} →</a>
+        </article>`).join('');
+      if (data.mode === 'demo') msg.innerHTML = '<p class="note">Demo mode: add TAVILY_API_KEY in Vercel for live results.</p>';
+    } catch (err) {
+      stepsEl.innerHTML = '';
+      msg.innerHTML = `<p class="err">${esc(err.message)}</p>`;
+    } finally {
+      go.disabled = false; go.textContent = 'Find gifts';
+    }
+  };
+</script>
+</body>
+</html>
