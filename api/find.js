@@ -57,43 +57,16 @@ export async function findGifts(request, steps, env) {
   // Step 2: search the web (first search also asks Tavily's AI for advice)
   const searches = await Promise.all(
     queries.map((q, i) =>
-      tavilySearch(tavilyKey, q, i === 0 ? `Suggest exactly 3 specific, real, named gift products (brand + model) available to buy in the UK for: ${request}. Stay within budget. Answer with exactly 3 lines in this format and nothing else: Product name | approx price in £ | one warm sentence on why it suits them` : null).catch(() => ({ results: [] }))
+      tavilySearch(tavilyKey, q, i === 0 ? `What are 3 great specific gift products to buy in the UK for: ${request}? Keep it brief.` : null).catch(() => ({ results: [] }))
     )
   );
-  let advice = searches[0].answer || null;
-  const ideas = parseIdeas(advice);
+  const advice = searches[0].answer || null;
   const seen = new Set();
   const results = searches
     .flatMap((s) => s.results || [])
     .filter((r) => r.url && !SOCIAL.test(hostOf(r.url)) && !seen.has(r.url) && seen.add(r.url));
   steps.push(`Read ${results.length} pages from across the web`);
   if (!results.length) return { mode: "live", advice, gifts: [] };
-
-  // Step 3a: the AI named specific products, so find a real shop page for each
-  if (!xaiKey && ideas.length >= 2) {
-    steps.push(`AI shortlisted: ${ideas.map((i) => i.name).join(", ")}`);
-    steps.push("Finding a UK shop selling each one");
-    const found = await Promise.all(
-      ideas.map((idea) =>
-        tavilySearch(tavilyKey, `${idea.name} buy UK`, null, "basic")
-          .then((s) => (s.results || []).filter((r) => r.url && !SOCIAL.test(hostOf(r.url))))
-          .catch(() => [])
-      )
-    );
-    const used = new Set();
-    const gifts = ideas.map((idea, i) => {
-      const best = rankResults(found[i].filter((r) => !used.has(r.url)), budget, true)[0];
-      if (best) used.add(best.url);
-      return {
-        name: idea.name,
-        price: idea.price || best?.price || null,
-        reason: idea.reason,
-        url: best?.url || `https://www.google.co.uk/search?tbm=shop&q=${encodeURIComponent(idea.name)}`,
-      };
-    });
-    steps.push("Done");
-    return { mode: "tavily-agent", advice: null, gifts };
-  }
 
   // Step 3: pick the best 3
   if (xaiKey) {
@@ -133,7 +106,7 @@ function findPrice(text) {
   return m ? Number(m[1]) : null;
 }
 
-function rankResults(results, budget, anyHost = false) {
+function rankResults(results, budget) {
   const scored = results.map((r) => {
     const host = hostOf(r.url);
     const text = `${r.title} ${r.content || ""}`;
@@ -152,7 +125,7 @@ function rankResults(results, budget, anyHost = false) {
   for (const pass of [true, false]) {
     for (const s of scored) {
       if (out.length >= 3) break;
-      if (out.includes(s) || (pass && !anyHost && hosts.has(s.host))) continue;
+      if (out.includes(s) || (pass && hosts.has(s.host))) continue;
       out.push(s); hosts.add(s.host);
     }
   }
@@ -164,53 +137,22 @@ function rankResults(results, budget, anyHost = false) {
   }));
 }
 
-function parseIdeas(answer) {
-  if (!answer) return [];
-  let lines = String(answer).split(/\n+/);
-  if (lines.filter((l) => l.split("|").length >= 3).length < 2) {
-    // All on one line: "A | £1 | why. B | £2 | why. C | £3 | why."
-    const parts = String(answer).split("|").map((x) => x.trim());
-    lines = [];
-    let name = parts[0];
-    for (let i = 1; i + 1 < parts.length; i += 2) {
-      const price = parts[i];
-      let reason = parts[i + 1], next = "";
-      if (i + 2 < parts.length) {
-        const m = reason.match(/^(.*[.!?])\s+(.+)$/);
-        if (m) { reason = m[1]; next = m[2]; }
-      }
-      lines.push(`${name} | ${price} | ${reason}`);
-      name = next;
-    }
-  }
-  return lines
-    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").replace(/\*\*/g, "").trim())
-    .filter((line) => line.split("|").length >= 3)
-    .slice(0, 3)
-    .map((line) => {
-      const [name, price, ...rest] = line.split("|").map((x) => x.trim());
-      const p = String(price).match(/\d+(?:\.\d{1,2})?/);
-      return { name: name.slice(0, 80), price: p ? `£${p[0]}` : null, reason: rest.join(" ").trim() };
-    })
-    .filter((i) => i.name && i.reason);
-}
-
 function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } }
 function cleanTitle(t) { return String(t || "Gift").split(/ [|–-] (?=[^|–-]*$)/)[0].slice(0, 90); }
 function firstSentence(t) {
-  const s = String(t || "").replace(/[#*_`>|]+/g, " ").replace(/\s+/g, " ").trim();
+  const s = String(t || "").replace(/\s+/g, " ").trim();
   const m = s.match(/^.{20,180}?[.!?](\s|$)/);
   return m ? m[0].trim() : s.slice(0, 160) + (s.length > 160 ? "…" : "");
 }
 
-async function tavilySearch(key, query, answerQuestion, depth = "advanced") {
+async function tavilySearch(key, query, answerQuestion) {
   const r = await fetch(TAVILY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       query: answerQuestion || query,
       max_results: 8,
-      search_depth: depth,
+      search_depth: "advanced",
       country: "united kingdom",
       include_answer: answerQuestion ? "advanced" : false,
     }),
