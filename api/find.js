@@ -82,16 +82,21 @@ export async function findGifts(request, steps, env) {
       )
     );
     const used = new Set();
+    const blocked = new Set();
+    found.flat().forEach((r) => { const t = checkShop(r.url); if (t.level === "copycat") blocked.add(hostOf(r.url)); });
     const gifts = ideas.map((idea, i) => {
       const best = rankResults(found[i].filter((r) => !used.has(r.url)), budget, true)[0];
       if (best) used.add(best.url);
+      const url = best?.url || `https://www.google.co.uk/search?tbm=shop&q=${encodeURIComponent(idea.name)}`;
       return {
         name: idea.name,
         price: idea.price || best?.price || null,
         reason: idea.reason,
-        url: best?.url || `https://www.google.co.uk/search?tbm=shop&q=${encodeURIComponent(idea.name)}`,
+        url,
+        trust: best ? best.trust : { level: "search", label: "No safe shop found · compare prices" },
       };
     });
+    steps.push(safetyStep(gifts, blocked));
     steps.push("Done");
     return { mode: "tavily-agent", advice: null, gifts };
   }
@@ -109,14 +114,79 @@ export async function findGifts(request, steps, env) {
       price: g.price && g.price !== "null" ? g.price : null,
       reason: g.reason || "",
       url: results[g.index].url,
-    }));
+      trust: checkShop(results[g.index].url),
+    })).filter((g) => g.trust.level !== "copycat");
     if (gifts.length) { steps.push("Done"); return { mode: "agent", advice, gifts }; }
   }
 
   steps.push("Scored every page: real shops over blog lists, within budget, different stores");
+  const blocked = new Set(results.filter((r) => checkShop(r.url).level === "copycat").map((r) => hostOf(r.url)));
   const gifts = rankResults(results, budget).slice(0, 3);
+  steps.push(safetyStep(gifts, blocked));
   steps.push("Done");
   return { mode: "tavily", advice, gifts };
+}
+
+// ---------- Shop safety check ----------
+// Well-known UK retailers and marketplaces (subdomains count too, e.g. store.lego.com).
+const TRUSTED = {
+  "amazon.co.uk": "Amazon", "argos.co.uk": "Argos", "johnlewis.com": "John Lewis", "etsy.com": "Etsy",
+  "ebay.co.uk": "eBay", "notonthehighstreet.com": "Not On The High Street", "boots.com": "Boots",
+  "superdrug.com": "Superdrug", "lookfantastic.com": "LookFantastic", "cultbeauty.co.uk": "Cult Beauty",
+  "spacenk.com": "Space NK", "sephora.co.uk": "Sephora", "beautybay.com": "Beauty Bay", "lush.com": "Lush",
+  "thebodyshop.com": "The Body Shop", "charlottetilbury.com": "Charlotte Tilbury", "theordinary.com": "The Ordinary",
+  "selfridges.com": "Selfridges", "harrods.com": "Harrods", "libertylondon.com": "Liberty",
+  "fortnumandmason.com": "Fortnum & Mason", "harveynichols.com": "Harvey Nichols",
+  "marksandspencer.com": "M&S", "next.co.uk": "Next", "very.co.uk": "Very", "currys.co.uk": "Currys",
+  "ao.com": "AO", "waterstones.com": "Waterstones", "whsmith.co.uk": "WHSmith", "blackwells.co.uk": "Blackwell's",
+  "foyles.co.uk": "Foyles", "uk.bookshop.org": "Bookshop.org", "theworks.co.uk": "The Works",
+  "hobbycraft.co.uk": "Hobbycraft", "smythstoys.com": "Smyths", "hamleys.com": "Hamleys",
+  "thetoyshop.com": "The Entertainer", "lego.com": "LEGO", "decathlon.co.uk": "Decathlon",
+  "lakeland.co.uk": "Lakeland", "souschef.co.uk": "Sous Chef", "firebox.com": "Firebox",
+  "menkind.co.uk": "Menkind", "prezzybox.com": "Prezzybox", "iwantoneofthose.com": "IWOOT",
+  "zavvi.com": "Zavvi", "hmv.com": "HMV", "game.co.uk": "GAME", "tesco.com": "Tesco",
+  "sainsburys.co.uk": "Sainsbury's", "waitrose.com": "Waitrose", "ocado.com": "Ocado",
+  "sportsdirect.com": "Sports Direct", "jdsports.co.uk": "JD Sports", "wiggle.com": "Wiggle",
+  "halfords.com": "Halfords", "cotswoldoutdoor.com": "Cotswold Outdoor", "gooutdoors.co.uk": "GO Outdoors",
+  "anglingdirect.co.uk": "Angling Direct", "asos.com": "ASOS", "hm.com": "H&M", "uniqlo.com": "Uniqlo",
+  "zara.com": "Zara", "ikea.com": "IKEA", "dunelm.com": "Dunelm", "habitat.co.uk": "Habitat",
+  "apple.com": "Apple", "screwfix.com": "Screwfix", "yumbles.com": "Yumbles",
+  "pastaevangelists.com": "Pasta Evangelists", "carluccios.com": "Carluccio's", "oliveoilavlaki.com": "Avlaki",
+  "hotelchocolat.com": "Hotel Chocolat", "thortful.com": "thortful", "moonpig.com": "Moonpig",
+  "funkypigeon.com": "Funky Pigeon", "virginexperiencedays.co.uk": "Virgin Experience Days",
+  "buyagift.co.uk": "Buyagift", "redletterdays.co.uk": "Red Letter Days",
+};
+const RISKY_TLD = /\.(shop|top|xyz|online|click|buzz|live|store|site|vip|cyou|icu|sbs)$/i;
+const brandOf = (host) =>
+  host.replace(/^(www|shop|store|uk)\./, "")
+    .replace(/\.(co\.uk|org\.uk|com|net|org|uk|shop|store|online|top|xyz|site|live|click|co)$/i, "")
+    .replace(/[-_.]?(uk|gb|official|online|shop|store|outlet|sale|deals|direct)$/i, "")
+    .replace(/^(the|shop|buy|official)[-_]?/i, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+const TRUSTED_BRANDS = Object.fromEntries(Object.keys(TRUSTED).map((d) => [brandOf(d), d]));
+
+function editDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return 2;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+
+export function checkShop(url) {
+  const host = hostOf(url);
+  if (!host) return { level: "unverified", label: "Unknown shop" };
+  const trusted = Object.keys(TRUSTED).find((d) => host === d || host.endsWith("." + d));
+  if (trusted) return { level: "trusted", label: `Trusted UK retailer · ${TRUSTED[trusted]}` };
+  const brand = brandOf(host);
+  let real = brand.length >= 4 ? TRUSTED_BRANDS[brand] : null;
+  if (!real && brand.length >= 6) real = Object.entries(TRUSTED_BRANDS).find(([b]) => b.length >= 6 && editDistance(b, brand) === 1)?.[1];
+  if (real) return { level: "copycat", label: `Possible copycat of ${real}`, realDomain: real };
+  if (RISKY_TLD.test(host)) return { level: "unverified", label: "Unverified shop · unusual web address" };
+  return { level: "unverified", label: "Independent shop · not verified" };
 }
 
 const SHOPS = /amazon\.co\.uk|etsy\.com|johnlewis|notonthehighstreet|argos|ebay\.co\.uk|boots\.com|waterstones|firebox|menkind|lakeland|selfridges|next\.co\.uk|marksandspencer|lookfantastic|currys|hobbycraft|smythstoys|hamleys|decathlon|very\.co\.uk|wilko|superdrug|cultbeauty|prezzybox|iwoot|zavvi|thetoyshop|garden|shop|store/i;
@@ -135,12 +205,13 @@ function findPrice(text) {
 }
 
 function rankResults(results, budget, anyHost = false) {
-  const scored = results.map((r) => {
+  const scored = results.filter((r) => checkShop(r.url).level !== "copycat").map((r) => {
     const host = hostOf(r.url);
     const text = `${r.title} ${r.content || ""}`;
     const price = findPrice(text);
     let score = r.score || 0;
     if (SHOPS.test(host)) score += 1;
+    if (checkShop(r.url).level === "trusted") score += 2;
     if (PRODUCT_PATH.test(r.url)) score += 1.5;
     if (/father'?s day|for sale|gifts for|presents/i.test(r.title) && !PRODUCT_PATH.test(r.url)) score -= 0.8;
     if (LISTICLE.test(r.title) || /\/blog|\/ideas|\/guide|reddit/.test(r.url)) score -= 1.2;
@@ -162,7 +233,15 @@ function rankResults(results, budget, anyHost = false) {
     price: price != null ? `£${price}` : null,
     reason: firstSentence(r.content),
     url: r.url,
+    trust: checkShop(r.url),
   }));
+}
+
+function safetyStep(gifts, blocked) {
+  const ok = gifts.filter((g) => g.trust?.level === "trusted").length;
+  let msg = `Safety check: ${ok} of ${gifts.length} links go to trusted UK retailers`;
+  if (blocked.size) msg += `, blocked ${blocked.size} copycat site${blocked.size > 1 ? "s" : ""} (${[...blocked].join(", ")})`;
+  return msg;
 }
 
 function parseIdeas(answer) {

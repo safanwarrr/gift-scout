@@ -7,9 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#fbf7f2; --card:#fff; --ink:#1d1b19; --muted:#6b645c; --line:#e8e0d6; --accent:#c2410c; --accent-ink:#fff; --soft:#fff1e8; }
+  :root { --bg:#fbf7f2; --card:#fff; --ink:#1d1b19; --muted:#6b645c; --line:#e8e0d6; --accent:#c2410c; --accent-ink:#fff; --soft:#fff1e8; --ok:#15803d; --ok-bg:#dcfce7; --warn:#a16207; --warn-bg:#fef3c7; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#161412; --card:#211e1b; --ink:#f3eee8; --muted:#a79e94; --line:#35302b; --accent:#fb923c; --accent-ink:#1d1208; --soft:#2b2119; }
+    :root { --bg:#161412; --card:#211e1b; --ink:#f3eee8; --muted:#a79e94; --line:#35302b; --accent:#fb923c; --accent-ink:#1d1208; --soft:#2b2119; --ok:#4ade80; --ok-bg:#12301d; --warn:#fbbf24; --warn-bg:#352a0e; }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 Inter, system-ui, sans-serif; }
@@ -38,6 +38,10 @@
   .gift h3 { margin:0; font-size:18px; }
   .price { font-weight:600; color:var(--accent); margin-left:6px; white-space:nowrap; }
   .gift p { margin:0; color:var(--muted); }
+  .foot { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin-top:4px; }
+  .badge { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:3px 9px; border-radius:99px; }
+  .badge.trusted { color:var(--ok); background:var(--ok-bg); }
+  .badge.unverified, .badge.search { color:var(--warn); background:var(--warn-bg); }
   .gift a { color:var(--ink); font-weight:600; font-size:14px; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
   .advice { background:var(--soft); border-radius:16px; padding:16px 20px; margin-top:22px; animation:rise .4s ease both; }
   .advice b { display:block; font-size:13px; color:var(--accent); margin-bottom:4px; }
@@ -50,7 +54,7 @@
 <main>
   <span class="tag">AI shopping agent</span>
   <h1>Find the right gift in seconds.</h1>
-  <p class="lead">Describe who it's for, what they love and your budget. The agent searches real UK shops and picks three.</p>
+  <p class="lead">Describe who it's for, what they love and your budget. The agent searches real UK shops, picks three, and checks every shop is safe to buy from.</p>
 
   <form id="f">
     <textarea id="q" rows="2" placeholder="My dad, turning 60, loves fishing and crosswords, about £40"></textarea>
@@ -89,7 +93,7 @@
     try {
       const r = await fetch('/api/find', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ request }) });
       const data = await r.json();
-      stepsEl.innerHTML = (data.steps || []).map(s => `<li>${esc(s)}</li>`).join('');
+      stepsEl.innerHTML = (data.steps || []).map(s => `<li>${/^Safety check/.test(s) ? '<b>🛡 ' + esc(s) + '</b>' : esc(s)}</li>`).join('');
       if (!r.ok) throw new Error(data.error || 'Request failed');
       if (data.advice) adviceEl.innerHTML = `<div class="advice"><b>Agent's advice</b><p>${esc(data.advice)}</p></div>`;
       if (!data.gifts?.length) { msg.innerHTML = '<p class="note">No good matches. Try adding a budget or a hobby.</p>'; return; }
@@ -98,7 +102,10 @@
           <div class="num">${i + 1}</div>
           <h3>${esc(g.name)}${g.price ? `<span class="price">${esc(g.price)}</span>` : ''}</h3>
           <p>${esc(g.reason)}</p>
-          <a href="${esc(g.url)}" target="_blank" rel="noopener">View at ${esc(host(g.url))} →</a>
+          <div class="foot">
+            <a href="${esc(g.url)}" target="_blank" rel="noopener">${g.trust?.level === 'search' ? 'Compare prices' : `View at ${esc(host(g.url))}`} →</a>
+            ${g.trust ? `<span class="badge ${esc(g.trust.level)}" title="${esc(g.trust.label)}">${g.trust.level === 'trusted' ? '✓' : '!'} ${esc(g.trust.label)}</span>` : ''}
+          </div>
         </article>`).join('');
       if (data.mode === 'demo') msg.innerHTML = '<p class="note">Demo mode: add TAVILY_API_KEY in Vercel for live results.</p>';
     } catch (err) {
